@@ -16,6 +16,9 @@
 #include <net/ipv6.h>
 #include <net/dsfield.h>
 #include <net/pkt_cls.h>
+#include <net/protocol.h>
+#include <net/tcp.h>
+#include <net/udp.h>
 
 #include <linux/tc_act/tc_skbedit.h>
 #include <net/tc_act/tc_skbedit.h>
@@ -23,12 +26,49 @@
 static unsigned int skbedit_net_id;
 static struct tc_action_ops act_skbedit_ops;
 
+static int tcf_skbedit_ipv4_early_demux(struct sk_buff *skb)
+{
+	const struct iphdr *iph = ip_hdr(skb);
+	int (*edemux)(struct sk_buff *skb);
+	const struct net_protocol *ipprot;
+	int ret = 0;
+
+	if (skb_dst(skb) || skb->sk || ip_is_fragment(iph))
+		return 0;
+
+	ipprot = rcu_dereference(inet_protos[iph->protocol]);
+	if (ipprot) {
+		edemux = READ_ONCE(ipprot->early_demux);
+		if (edemux)
+			ret = INDIRECT_CALL_2(edemux, tcp_v4_early_demux, udp_v4_early_demux, skb);
+	}
+
+	return ret;
+}
+
+static void tcf_skbedit_ipv6_early_demux(struct sk_buff *skb)
+{
+	const struct ipv6hdr *iph = ipv6_hdr(skb);
+	const struct inet6_protocol *ipprot;
+	void (*edemux)(struct sk_buff *skb);
+
+	if (skb_dst(skb) || skb->sk)
+		return;
+
+	ipprot = rcu_dereference(inet6_protos[iph->nexthdr]);
+	if (ipprot) {
+		edemux = READ_ONCE(ipprot->early_demux);
+		if (edemux)
+			INDIRECT_CALL_2(edemux, tcp_v6_early_demux, udp_v6_early_demux, skb);
+	}
+}
+
 static int tcf_skbedit_act(struct sk_buff *skb, const struct tc_action *a,
 			   struct tcf_result *res)
 {
 	struct tcf_skbedit *d = to_skbedit(a);
 	struct tcf_skbedit_params *params;
-	int action;
+	int action, err;
 
 	tcf_lastuse_update(&d->tcf_tm);
 	bstats_cpu_update(this_cpu_ptr(d->common.cpu_bstats), skb);
@@ -45,14 +85,14 @@ static int tcf_skbedit_act(struct sk_buff *skb, const struct tc_action *a,
 		case htons(ETH_P_IP):
 			wlen += sizeof(struct iphdr);
 			if (!pskb_may_pull(skb, wlen))
-				goto err;
+				goto drop;
 			skb->priority = ipv4_get_dsfield(ip_hdr(skb)) >> 2;
 			break;
 
 		case htons(ETH_P_IPV6):
 			wlen += sizeof(struct ipv6hdr);
 			if (!pskb_may_pull(skb, wlen))
-				goto err;
+				goto drop;
 			skb->priority = ipv6_get_dsfield(ipv6_hdr(skb)) >> 2;
 			break;
 		}
@@ -66,9 +106,29 @@ static int tcf_skbedit_act(struct sk_buff *skb, const struct tc_action *a,
 	}
 	if (params->flags & SKBEDIT_F_PTYPE)
 		skb->pkt_type = params->ptype;
+	if (params->flags & SKBEDIT_F_EDEMUX) {
+		int wlen = skb_network_offset(skb);
+
+		switch (skb_protocol(skb, true)) {
+		case htons(ETH_P_IP):
+			wlen += sizeof(struct iphdr);
+			if (!pskb_may_pull(skb, wlen))
+				goto drop;
+			err = tcf_skbedit_ipv4_early_demux(skb);
+			if (err)
+				goto drop;
+			break;
+		case htons(ETH_P_IPV6):
+			wlen += sizeof(struct ipv6hdr);
+			if (!pskb_may_pull(skb, wlen))
+				goto drop;
+			tcf_skbedit_ipv6_early_demux(skb);
+		}
+	}
+
 	return action;
 
-err:
+drop:
 	qstats_drop_inc(this_cpu_ptr(d->common.cpu_qstats));
 	return TC_ACT_SHOT;
 }
@@ -155,6 +215,8 @@ static int tcf_skbedit_init(struct net *net, struct nlattr *nla,
 
 		if (*pure_flags & SKBEDIT_F_INHERITDSFIELD)
 			flags |= SKBEDIT_F_INHERITDSFIELD;
+		if (*pure_flags & SKBEDIT_F_EDEMUX)
+			flags |= SKBEDIT_F_EDEMUX;
 	}
 
 	parm = nla_data(tb[TCA_SKBEDIT_PARMS]);
@@ -272,6 +334,8 @@ static int tcf_skbedit_dump(struct sk_buff *skb, struct tc_action *a,
 		goto nla_put_failure;
 	if (params->flags & SKBEDIT_F_INHERITDSFIELD)
 		pure_flags |= SKBEDIT_F_INHERITDSFIELD;
+	if (params->flags & SKBEDIT_F_EDEMUX)
+		pure_flags |= SKBEDIT_F_EDEMUX;
 	if (pure_flags != 0 &&
 	    nla_put(skb, TCA_SKBEDIT_FLAGS, sizeof(pure_flags), &pure_flags))
 		goto nla_put_failure;
