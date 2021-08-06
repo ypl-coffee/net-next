@@ -1753,6 +1753,14 @@ int tcp_v4_early_demux(struct sk_buff *skb)
 	iph = ip_hdr(skb);
 	th = tcp_hdr(skb);
 
+	/* RFC 739 3.1. Header Format (https://datatracker.ietf.org/doc/html/rfc793#section-3.1)
+	 * Data Offset:  4 bits
+	 *	The number of 32 bit words in the TCP Header.  This indicates where
+	 *	the data begins.  The TCP header (even one including options) is an
+	 *	integral number of 32 bits long.
+	 *
+	 * sizeof(struct tcphdr) is 20, which cannot be represented using 4 bits anyway.
+	 */
 	if (th->doff < sizeof(struct tcphdr) / 4)
 		return 0;
 
