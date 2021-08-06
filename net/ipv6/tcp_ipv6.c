@@ -1851,6 +1851,9 @@ INDIRECT_CALLABLE_SCOPE void tcp_v6_early_demux(struct sk_buff *skb)
 	const struct tcphdr *th;
 	struct sock *sk;
 
+	/* packet(7):
+	 * PACKET_HOST for a packet addressed to the local host...
+	 * These types make sense only for receiving. */
 	if (skb->pkt_type != PACKET_HOST)
 		return;
 
