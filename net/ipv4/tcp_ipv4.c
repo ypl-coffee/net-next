@@ -1772,12 +1772,20 @@ int tcp_v4_early_demux(struct sk_buff *skb)
 		skb->sk = sk;
 		skb->destructor = sock_edemux;
 		if (sk_fullsock(sk)) {
+			/* ULNI p879, Interface Between the DST and Calling Protocols
+			 *
+			 * All of those references refer to dst_entry, not to its rtable wrapper.
+			 * The sk_buff buffers also keep a reference to the dst_entry structure,
+			 * not to the rtable structure.  This reference is used to store the result
+			 * of the routing lookup.
+			 */
 			struct dst_entry *dst = READ_ONCE(sk->sk_rx_dst);
 
 			if (dst)
 				dst = dst_check(dst, 0);
 			if (dst &&
 			    inet_sk(sk)->rx_dst_ifindex == skb->skb_iif)
+			    	/* skb->_skb_refdst = (unsigned long)dst | SKB_DST_NOREF; */
 				skb_dst_set_noref(skb, dst);
 		}
 	}
