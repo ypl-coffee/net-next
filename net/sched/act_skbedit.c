@@ -66,6 +66,8 @@ static int tcf_skbedit_act(struct sk_buff *skb, const struct tc_action *a,
 	}
 	if (params->flags & SKBEDIT_F_PTYPE)
 		skb->pkt_type = params->ptype;
+	if (params->flags & SKBEDIT_F_SKCLEAR)
+		skb_orphan(skb);
 	return action;
 
 err:
@@ -155,6 +157,8 @@ static int tcf_skbedit_init(struct net *net, struct nlattr *nla,
 
 		if (*pure_flags & SKBEDIT_F_INHERITDSFIELD)
 			flags |= SKBEDIT_F_INHERITDSFIELD;
+		if (*pure_flags & SKBEDIT_F_SKCLEAR)
+			flags |= SKBEDIT_F_SKCLEAR;
 	}
 
 	parm = nla_data(tb[TCA_SKBEDIT_PARMS]);
@@ -272,6 +276,8 @@ static int tcf_skbedit_dump(struct sk_buff *skb, struct tc_action *a,
 		goto nla_put_failure;
 	if (params->flags & SKBEDIT_F_INHERITDSFIELD)
 		pure_flags |= SKBEDIT_F_INHERITDSFIELD;
+	if (params->flags & SKBEDIT_F_SKCLEAR)
+		pure_flags |= SKBEDIT_F_SKCLEAR;
 	if (pure_flags != 0 &&
 	    nla_put(skb, TCA_SKBEDIT_FLAGS, sizeof(pure_flags), &pure_flags))
 		goto nla_put_failure;
