@@ -318,6 +318,8 @@ struct sock *__udp4_lib_lookup(struct net *net, __be32 saddr, __be16 sport,
 			       struct udp_table *tbl, struct sk_buff *skb);
 struct sock *udp4_lib_lookup_skb(const struct sk_buff *skb,
 				 __be16 sport, __be16 dport);
+inline struct sock *udp4_lib_demux_lookup(struct net *net, __be16 loc_port, __be32 loc_addr,
+					  __be16 rmt_port, __be32 rmt_addr, int dif);
 struct sock *udp6_lib_lookup(struct net *net,
 			     const struct in6_addr *saddr, __be16 sport,
 			     const struct in6_addr *daddr, __be16 dport,
@@ -329,6 +331,10 @@ struct sock *__udp6_lib_lookup(struct net *net,
 			       struct sk_buff *skb);
 struct sock *udp6_lib_lookup_skb(const struct sk_buff *skb,
 				 __be16 sport, __be16 dport);
+inline struct sock *udp6_lib_demux_lookup(struct net *net,
+					  __be16 loc_port, const struct in6_addr *loc_addr,
+					  __be16 rmt_port, const struct in6_addr *rmt_addr,
+					  int dif);
 int udp_read_sock(struct sock *sk, read_descriptor_t *desc,
 		  sk_read_actor_t recv_actor);
 

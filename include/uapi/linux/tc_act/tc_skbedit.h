@@ -30,6 +30,7 @@
 #define SKBEDIT_F_MASK			0x10
 #define SKBEDIT_F_INHERITDSFIELD	0x20
 #define	SKBEDIT_F_SKCLEAR		0x40
+#define SKBEDIT_F_SKSET			0x80
 
 struct tc_skbedit {
 	tc_gen;

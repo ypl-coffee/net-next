@@ -1041,6 +1041,15 @@ static struct sock *__udp6_lib_demux_lookup(struct net *net,
 	return NULL;
 }
 
+inline struct sock *udp6_lib_demux_lookup(struct net *net,
+					  __be16 loc_port, const struct in6_addr *loc_addr,
+					  __be16 rmt_port, const struct in6_addr *rmt_addr,
+					  int dif)
+{
+	return __udp6_lib_demux_lookup(net, loc_port, loc_addr, rmt_port, rmt_addr, dif, 0);
+}
+EXPORT_SYMBOL_GPL(udp6_lib_demux_lookup);
+
 INDIRECT_CALLABLE_SCOPE void udp_v6_early_demux(struct sk_buff *skb)
 {
 	struct net *net = dev_net(skb->dev);

@@ -2545,6 +2545,15 @@ static struct sock *__udp4_lib_demux_lookup(struct net *net,
 	return NULL;
 }
 
+inline struct sock *udp4_lib_demux_lookup(struct net *net,
+					  __be16 loc_port, __be32 loc_addr,
+					  __be16 rmt_port, __be32 rmt_addr,
+					  int dif)
+{
+	return __udp4_lib_demux_lookup(net, loc_port, loc_addr, rmt_port, rmt_addr, dif, 0);
+}
+EXPORT_SYMBOL_GPL(udp4_lib_demux_lookup);
+
 int udp_v4_early_demux(struct sk_buff *skb)
 {
 	struct net *net = dev_net(skb->dev);
