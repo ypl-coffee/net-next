@@ -166,6 +166,7 @@ struct sk_buff *l3mdev_l3_rcv(struct sk_buff *skb, u16 proto)
 {
 	struct net_device *master = NULL;
 
+	/* <linux/netdevice.h> dev->priv_flags & IFF_L3MDEV_SLAVE; */
 	if (netif_is_l3_slave(skb->dev))
 		master = netdev_master_upper_dev_get_rcu(skb->dev);
 	else if (netif_is_l3_master(skb->dev) ||
