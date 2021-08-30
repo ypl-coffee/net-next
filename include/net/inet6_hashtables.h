@@ -48,6 +48,17 @@ struct sock *__inet6_lookup_established(struct net *net,
 					const u16 hnum, const int dif,
 					const int sdif);
 
+static inline struct sock *inet6_lookup_established(struct net *net,
+						    struct inet_hashinfo *hashinfo,
+						    const struct in6_addr *saddr,
+						    const __be16 sport,
+						    const struct in6_addr *daddr,
+						    const u16 dport, const int dif)
+{
+	return __inet6_lookup_established(net, hashinfo, saddr, sport, daddr,
+					  ntohs(dport), dif, 0);
+}
+
 struct sock *inet6_lookup_listener(struct net *net,
 				   struct inet_hashinfo *hashinfo,
 				   struct sk_buff *skb, int doff,

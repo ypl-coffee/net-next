@@ -16,12 +16,152 @@
 #include <net/ipv6.h>
 #include <net/dsfield.h>
 #include <net/pkt_cls.h>
+#include <net/inet_hashtables.h>
+#include <net/inet6_hashtables.h>
+#include <net/tcp.h>
+#include <net/udp.h>
 
 #include <linux/tc_act/tc_skbedit.h>
 #include <net/tc_act/tc_skbedit.h>
 
 static unsigned int skbedit_net_id;
 static struct tc_action_ops act_skbedit_ops;
+
+static void tcf_skbedit_sk_lookup_ipv4_tcp(struct net *net, struct sk_buff *skb,
+					   const struct iphdr *iph, bool ingress)
+{
+	const struct tcphdr *th = tcp_hdr(skb);
+	int dif = skb->skb_iif;
+	struct sock *sk;
+
+	if (th->doff < sizeof(*th) / 4)
+		return;
+
+	if (ingress)
+		sk = inet_lookup_established(net, &tcp_hashinfo, iph->saddr, th->source,
+					     iph->daddr, th->dest, dif);
+	else
+		sk = inet_lookup_established(net, &tcp_hashinfo, iph->daddr, th->dest,
+					     iph->saddr, th->source, dif);
+
+	if (!sk)
+		return;
+
+	skb->sk = sk;
+	skb->destructor = sock_edemux;
+}
+
+static void tcf_skbedit_sk_lookup_ipv4_udp(struct net *net, struct sk_buff *skb,
+					   const struct iphdr *iph, bool ingress)
+{
+	const struct udphdr *uh = udp_hdr(skb);
+	int dif = skb->skb_iif;
+	struct sock *sk;
+
+	if (ingress)
+		sk = udp4_lib_demux_lookup(net, uh->dest, iph->daddr,
+					   uh->source, iph->saddr, dif);
+	else
+		sk = udp4_lib_demux_lookup(net, uh->source, iph->saddr,
+					   uh->dest, iph->daddr, dif);
+
+	if (!sk || !refcount_inc_not_zero(&sk->sk_refcnt))
+		return;
+
+	skb->sk = sk;
+	skb->destructor = sock_efree;
+}
+
+static void tcf_skbedit_sk_lookup_ipv4(struct net *net, struct sk_buff *skb, bool ingress)
+{
+	const struct iphdr *iph = ip_hdr(skb);
+	int rlen = skb_transport_offset(skb);
+
+	if (skb->sk || ip_is_fragment(iph))
+		return;
+
+	switch (iph->protocol) {
+	case IPPROTO_TCP:
+		rlen += sizeof(struct tcphdr);
+		if (!pskb_may_pull(skb, rlen))
+			return;
+		tcf_skbedit_sk_lookup_ipv4_tcp(net, skb, iph, ingress);
+		break;
+	case IPPROTO_UDP:
+		rlen += sizeof(struct udphdr);
+		if (!pskb_may_pull(skb, rlen))
+			return;
+		tcf_skbedit_sk_lookup_ipv4_udp(net, skb, iph, ingress);
+	}
+}
+
+static void tcf_skbedit_sk_lookup_ipv6_tcp(struct net *net, struct sk_buff *skb,
+					   const struct ipv6hdr *iph, bool ingress)
+{
+	const struct tcphdr *th = tcp_hdr(skb);
+	int dif = skb->skb_iif;
+	struct sock *sk;
+
+	if (th->doff < sizeof(*th) / 4)
+		return;
+
+	if (ingress)
+		sk = inet6_lookup_established(net, &tcp_hashinfo, &iph->saddr, th->source,
+					      &iph->daddr, th->dest, dif);
+	else
+		sk = inet6_lookup_established(net, &tcp_hashinfo, &iph->daddr, th->dest,
+					      &iph->saddr, th->source, dif);
+
+	if (!sk)
+		return;
+
+	skb->sk = sk;
+	skb->destructor = sock_edemux;
+}
+
+static void tcf_skbedit_sk_lookup_ipv6_udp(struct net *net, struct sk_buff *skb,
+					   const struct ipv6hdr *iph, bool ingress)
+{
+	const struct udphdr *uh = udp_hdr(skb);
+	int dif = skb->skb_iif;
+	struct sock *sk;
+
+	if (ingress)
+		sk = udp6_lib_demux_lookup(net, uh->dest, &iph->daddr,
+					   uh->source, &iph->saddr, dif);
+	else
+		sk = udp6_lib_demux_lookup(net, uh->source, &iph->saddr,
+					   uh->dest, &iph->daddr, dif);
+
+	if (!sk || !refcount_inc_not_zero(&sk->sk_refcnt))
+		return;
+
+	skb->sk = sk;
+	skb->destructor = sock_efree;
+}
+
+static void tcf_skbedit_sk_lookup_ipv6(struct net *net, struct sk_buff *skb, bool ingress)
+{
+	const struct ipv6hdr *iph = ipv6_hdr(skb);
+	int rlen = skb_transport_offset(skb);
+
+	if (skb->sk)
+		return;
+
+	switch (iph->nexthdr) {
+	case IPPROTO_TCP:
+		rlen += sizeof(struct tcphdr);
+		if (!pskb_may_pull(skb, rlen))
+			return;
+		tcf_skbedit_sk_lookup_ipv6_tcp(net, skb, iph, ingress);
+		break;
+	case IPPROTO_UDP:
+		rlen += sizeof(struct udphdr);
+		if (!pskb_may_pull(skb, rlen))
+			return;
+		tcf_skbedit_sk_lookup_ipv6_udp(net, skb, iph, ingress);
+	}
+}
 
 static int tcf_skbedit_act(struct sk_buff *skb, const struct tc_action *a,
 			   struct tcf_result *res)
@@ -68,6 +208,25 @@ static int tcf_skbedit_act(struct sk_buff *skb, const struct tc_action *a,
 		skb->pkt_type = params->ptype;
 	if (params->flags & SKBEDIT_F_SKCLEAR)
 		skb_orphan(skb);
+	if (params->flags & SKBEDIT_F_SKSET && skb->pkt_type == PACKET_HOST) {
+		bool ingress = skb_at_tc_ingress(skb);
+		struct net *net = dev_net(skb->dev);
+		int rlen = skb_network_offset(skb);
+
+		switch (skb_protocol(skb, true)) {
+		case htons(ETH_P_IP):
+			rlen += sizeof(struct iphdr);
+			if (!pskb_may_pull(skb, rlen))
+				break;
+			tcf_skbedit_sk_lookup_ipv4(net, skb, ingress);
+			break;
+		case htons(ETH_P_IPV6):
+			rlen += sizeof(struct ipv6hdr);
+			if (!pskb_may_pull(skb, rlen))
+				break;
+			tcf_skbedit_sk_lookup_ipv6(net, skb, ingress);
+		}
+	}
 	return action;
 
 err:
@@ -157,8 +316,11 @@ static int tcf_skbedit_init(struct net *net, struct nlattr *nla,
 
 		if (*pure_flags & SKBEDIT_F_INHERITDSFIELD)
 			flags |= SKBEDIT_F_INHERITDSFIELD;
+
 		if (*pure_flags & SKBEDIT_F_SKCLEAR)
 			flags |= SKBEDIT_F_SKCLEAR;
+		else if (*pure_flags & SKBEDIT_F_SKSET)
+			flags |= SKBEDIT_F_SKSET;
 	}
 
 	parm = nla_data(tb[TCA_SKBEDIT_PARMS]);
@@ -278,6 +440,8 @@ static int tcf_skbedit_dump(struct sk_buff *skb, struct tc_action *a,
 		pure_flags |= SKBEDIT_F_INHERITDSFIELD;
 	if (params->flags & SKBEDIT_F_SKCLEAR)
 		pure_flags |= SKBEDIT_F_SKCLEAR;
+	if (params->flags & SKBEDIT_F_SKSET)
+		pure_flags |= SKBEDIT_F_SKSET;
 	if (pure_flags != 0 &&
 	    nla_put(skb, TCA_SKBEDIT_FLAGS, sizeof(pure_flags), &pure_flags))
 		goto nla_put_failure;
