@@ -147,6 +147,7 @@ static const struct sysrq_key_op sysrq_unraw_op = {
 #define sysrq_unraw_op (*(const struct sysrq_key_op *)NULL)
 #endif /* CONFIG_VT */
 
+/* echo c > /proc/sysrq-trigger */
 static void sysrq_handle_crash(int key)
 {
 	/* release the RCU read lock before crashing */
