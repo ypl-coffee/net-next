@@ -598,6 +598,7 @@ static int sock_bindtoindex_locked(struct sock *sk, int ifindex)
 	if (ifindex < 0)
 		goto out;
 
+	/* SO_BINDTO{DEVICE,IFINDEX} */
 	sk->sk_bound_dev_if = ifindex;
 	if (sk->sk_prot->rehash)
 		sk->sk_prot->rehash(sk);
